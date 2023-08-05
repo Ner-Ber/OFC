@@ -1,91 +1,166 @@
 
 import numpy as np
+import pandas as pd
 import grid_updaters
+import tqdm
 
 DEFAULT_UPDATER = grid_updaters.NNCoulombFrictionUpdater(10, 0.5, 0.23)
 
 class BaseGrid:
-    def __init__(self, n, m=None, updater=DEFAULT_UPDATER, boundary_size=None):
-        if m is None:
-            m = n
-        self.n = n
-        self.m = m
-        if boundary_size is None:
-            boundary_size = int(np.ceil(0.1*n))
-        self.boundary_size = boundary_size
-        self._create_cache()
-        self._initialize_grid()
-        self._save_to_cache(self.grid)
-        self.updater = updater
-    
-    def run_n_steps(self, n):
-        counter = 0
-        n_sites = []
-        #TODO: implement the inside and clean boundary methods
-        while counter < n+1:    #TODO change to for loop
-            updated_grid = self.updater.update_step(self.grid)
-            observables = self.updater.avalanche_details
-            # n_site_avalanched = len(avalanche_details['released_values'])
-            n_site_avalanched = observables['released_values'] > 0
-            if n_site_avalanched==0:
-                counter += 1
-                if counter >= n:
-                    break
-            n_sites.append(n_site_avalanched)
-            self._save_to_cache(updated_grid)
-            self.grid = updated_grid
-        return np.array(n_sites)
-    
-    def clear_cache(self):
-        self._create_cache()
-        
-    def _create_cache(self):
-        self.cache = np.empty((self.n, self.m, 0))
-    
-    def _initialize_grid(self):
-        self.grid = np.random.rand(
-            self.n+self.boundary_size,
-            self.m+self.boundary_size
-            )
-        # self.grid = np.random.beta(1, 3, (self.n, self.m))
+	# TODO: add docstring
+	def __init__(self, n, m=None, boundary_size=None, save_every=3):
+		if m is None:
+			m = n
+		self.n = n
+		self.m = m
+		if boundary_size is None:
+			boundary_size = int(np.ceil(0.1*n))
+		self.boundary_size = boundary_size
+		self.save_every = save_every
+		self._initialize_grid()
+		self.observables = []
+		self._create_cache()
 
-    def _inside(self, array: np.ndarray):
-        return array[self.boundary_size:(-self.boundary_size), self.boundary_size:(-self.boundary_size)]
+	def run_n_steps(self, n, progress=False):
+		for i in tqdm.tqdm(range(n), disable=progress):
+			# print(f'i={i}')
+			# time.sleep(0.01)
+			observables = self.update_step()
+			self.observables.append(observables)
+			if (i%self.save_every)==0:
+				self._save_to_cache()
 
-    def clean_boundary_inplace(self, array: np.ndarray, fill_value = False) -> np.ndarray:
-        """
-        Fill `array` at the boundary with `fill_value`.
+	def clear_cache(self):
+		self.cache = np.empty_like(self.grid[:, :, 0])
+		# np.empty((self.n, self.m, 0))
+		# self._create_cache()
 
-        Useful to make sure sites on the borders do not become active and don't start toppling.
+	def update_step(self) -> dict:
+		"""Abstract method for updating step."""
+		return {}
 
-        Works inplace - will modify the existing array!
+	def _create_cache(self):
+		self.cache = self.grid[:, :, None].copy()
+		# self.cache = np.empty((self.n, self.m, 0))
 
-        :param array: array to be cleaned
-        :param fill_value: value to fill boundaries with
-        :rtype: np.ndarray
-        """
-        array[:self.boundary_size, :] = fill_value
-        array[-self.boundary_size:, :] = fill_value
-        array[:, :self.boundary_size] = fill_value
-        array[:, -self.boundary_size:] = fill_value
-        return array
-        
+	def _initialize_grid(self):
+		self.grid = np.random.rand(
+			self.n + 2*self.boundary_size,
+			self.m + 2*self.boundary_size
+			)
+		self._define_inside_logical()
 
-    def _save_to_cache(self, grid):
-        self.cache = np.concatenate((self.cache, grid[:,:,None]), axis=2)
+	def _define_inside_logical(self):
+		x_idxs, y_idxs = np.meshgrid(
+			range(self.n + 2*self.boundary_size),
+			range(self.m + 2*self.boundary_size),
+		)
+		self.inside_logical = (
+			(x_idxs >= self.boundary_size) &
+			(x_idxs < (self.n + self.boundary_size))	&
+			(y_idxs >= self.boundary_size) &
+			(y_idxs < (self.m + self.boundary_size))
+		)
+
+	def _inside(self, array: np.ndarray):
+		return array[self.boundary_size:(-self.boundary_size), self.boundary_size:(-self.boundary_size)]
+
+	def _clean_boundary_inplace(
+			self,
+			array: np.ndarray,
+			fill_value = False) -> np.ndarray:
+		array[~self.inside_logical] = fill_value
+		# array[:self.boundary_size, :] = fill_value
+		# array[-self.boundary_size:, :] = fill_value
+		# array[:, :self.boundary_size] = fill_value
+		# array[:, -self.boundary_size:] = fill_value
+		return array
+
+	def _save_to_cache(self):
+		self.cache = np.concatenate((self.cache, self.grid[:,:,None]), axis=2)
+
+	def observables_df(self):
+		return pd.DataFrame(self.observables)
+
+
+
+class NNCoulombFrictionGrid(BaseGrid):
+	"""A grid to simulate simple OFC (Coulomb friction and nearest neighbors
+		interactions)"""
+
+	def __init__(self, f_s, increment, alpha, *args, **kwargs):
+		super().__init__(*args, **kwargs)
+		self.f_s = f_s
+		self.increment = increment
+		self.alpha = alpha
+		self._adjust_init_grid()
+
+
+	def update_step(self):
+		self.drive()
+		number_of_iterations, avalanche_size, number_of_releases = self.topple()
+		observables = {
+			'number_of_iterations': number_of_iterations,
+			'avalanche_size': avalanche_size,
+			'number_of_releases': number_of_releases,
+		}
+		return observables
+
+	def drive(self):
+		self.grid += self.increment
+
+	def topple(self) -> int:
+
+		visited = np.full_like(self.grid, False)
+		releases = np.full_like(self.grid, 0)
+
+		active_sites = self._clean_boundary_inplace(
+			self.grid >= self.f_s, False
+			)
+		_ = self._clean_boundary_inplace(self.grid, 0)
+		number_of_iterations = 0
+
+		while active_sites.any():
+			releases += active_sites
+			indices = np.vstack(np.where(active_sites)).T
+			# a nx2 array of integer indices for overloaded sites
+			n_active = indices.shape[0]
+			for i in range(n_active):
+				x, y = index = indices[i]
+
+				neighbors = index + np.array([[0, 1], [-1, 0], [1, 0], [0,-1]])
+				for j in range(len(neighbors)):
+					xn, yn = neighbors[j]
+					# self.grid[xn, yn] += self.alpha * (self.grid[x, y] - self.f_s)
+					self.grid[xn, yn] += self.alpha * self.grid[x, y]
+					visited[xn, yn] = True
+				# self.grid[x, y] = self.f_s
+				self.grid[x, y] = 0
+				active_sites = self._clean_boundary_inplace(
+					self.grid >= self.f_s, False
+					)
+				_ = self._clean_boundary_inplace(self.grid, 0)
+			number_of_iterations += 1
+
+		avalanche_size = self._inside(visited).sum()
+		number_of_releases = self._inside(releases).sum()
+		return number_of_iterations, avalanche_size, number_of_releases
+
+	def _adjust_init_grid(self):
+		self.grid *= 0.9*self.f_s
 
 
 if __name__ == '__main__':
-    updater = grid_updaters.NNCoulombFrictionUpdater(f_s=3,
-                                                    increment=0.01,
-                                                    alpha=0,
-                                                    site_updater=grid_updaters._nn_update_ij_on_finite_bc,
-                                                    #  site_updater=grid_updaters._nn_update_ij_on_circular_bc,
-                                                    )
-    simple_grid = BaseGrid(200, updater=updater)
-    steps_in_iteration = 100
-    total_iterations = 10
-    n_sites = np.array([])
-    for _ in range(total_iterations):
-        n_sites = np.append(n_sites, simple_grid.run_n_steps(steps_in_iteration))
-        simple_grid.clear_cache()
+
+	try_grid = NNCoulombFrictionGrid(
+		10,
+		0.3,
+		0.23,
+		n=5,
+		m=5,
+		boundary_size=2,
+		save_every=3,
+	)
+	try_grid.run_n_steps(35)
+
+	pass

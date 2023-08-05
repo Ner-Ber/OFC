@@ -76,42 +76,42 @@ class NNCoulombFrictionUpdater(GridUpdater):
     def drive(self, grid):
         return grid + self.increment
 
-    def topple(
-            values: np.ndarray,
-            visited: np.ndarray,
-            releases: np.ndarray,
-            critical_value_current: float,
-            critical_value: float,
-            conservation_lvl: float,
-            boundary_size: int
-            ) -> int:
+    # def topple(
+    #         values: np.ndarray,
+    #         visited: np.ndarray,
+    #         releases: np.ndarray,
+    #         critical_value_current: float,
+    #         critical_value: float,
+    #         conservation_lvl: float,
+    #         boundary_size: int
+    #         ) -> int:
 
-    # find a boolean array of active (overloaded) sites
+    # # find a boolean array of active (overloaded) sites
 
-    active_sites = common.clean_boundary_inplace(
-        values >= critical_value_current, boundary_size)
-    number_of_iterations = 0
+    # active_sites = common.clean_boundary_inplace(
+    #     values >= critical_value_current, boundary_size)
+    # number_of_iterations = 0
 
-    while active_sites.any():
+    # while active_sites.any():
         
-        releases += active_sites
-        indices = np.vstack(np.where(active_sites)).T
-          # a Nx2 array of integer indices for overloaded sites
-        N = indices.shape[0]
-        for i in range(N):
-            x, y = index = indices[i]
+    #     releases += active_sites
+    #     indices = np.vstack(np.where(active_sites)).T
+    #       # a Nx2 array of integer indices for overloaded sites
+    #     N = indices.shape[0]
+    #     for i in range(N):
+    #         x, y = index = indices[i]
 
-            neighbors = index + np.array([[0, 1], [-1, 0], [1, 0], [0,-1]])
-            for j in range(len(neighbors)):
-                xn, yn = neighbors[j]
-                values[xn, yn] += conservation_lvl * (values[x, y] - critical_value_current + critical_value)   # Grassberger (1994), eqns (1)
-                visited[xn, yn] = True
+    #         neighbors = index + np.array([[0, 1], [-1, 0], [1, 0], [0,-1]])
+    #         for j in range(len(neighbors)):
+    #             xn, yn = neighbors[j]
+    #             values[xn, yn] += conservation_lvl * (values[x, y] - critical_value_current + critical_value)   # Grassberger (1994), eqns (1)
+    #             visited[xn, yn] = True
 
-            values[x, y] = critical_value_current - critical_value  # Grassberger (1994), eqns (1)
-            active_sites = common.clean_boundary_inplace(values >= critical_value_current, boundary_size)
-        number_of_iterations += 1
+    #         values[x, y] = critical_value_current - critical_value  # Grassberger (1994), eqns (1)
+    #         active_sites = common.clean_boundary_inplace(values >= critical_value_current, boundary_size)
+    #     number_of_iterations += 1
 
-    return number_of_iterations
+    # return number_of_iterations
 
 
 
