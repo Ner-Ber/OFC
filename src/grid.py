@@ -1,8 +1,11 @@
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib import animation
 import grid_updaters
 import tqdm
+from IPython.display import HTML, display
 
 DEFAULT_UPDATER = grid_updaters.NNCoulombFrictionUpdater(10, 0.5, 0.23)
 
@@ -63,7 +66,9 @@ class BaseGrid:
 		)
 
 	def _inside(self, array: np.ndarray):
-		return array[self.boundary_size:(-self.boundary_size), self.boundary_size:(-self.boundary_size)]
+		return array[
+			self.boundary_size:(-self.boundary_size), self.boundary_size:(-self.boundary_size), ...
+			]
 
 	def _clean_boundary_inplace(
 			self,
@@ -81,6 +86,57 @@ class BaseGrid:
 
 	def observables_df(self):
 		return pd.DataFrame(self.observables)
+
+	def animate_states(
+			self,
+			notebook: bool = False,
+			with_boundaries: bool = False,
+			interval: int = 1,
+			):
+		"""Present animation from cache.
+
+		Args:
+				notebook (bool, optional): _description_. Defaults to False.
+				with_boundaries (bool, optional): _description_. Defaults to False.
+				interval (int, optional): _description_. Defaults to 30.
+
+		Returns:
+				_type_: _description_
+		"""
+		fig, ax = plt.subplots()
+		if with_boundaries:
+			values = self.cache
+		else:
+			values = self._inside(self.cache)
+
+		im = ax.imshow(
+			values[:, :, 0],
+			interpolation='nearest',
+			vmin = values.min(),
+			vmax = values.max(),
+			)
+		plt.colorbar(im)
+		iterations = values.shape[2]
+		title = ax.set_title(f'Iteration {0}/{iterations*self.save_every}')
+
+		def animate(i):
+			im.set_data(values[:,:,i])
+			title.set_text(
+				f'Iteration {i * self.save_every}/{iterations * self.save_every}'
+				)
+			return im, title
+
+		anim = animation.FuncAnimation(
+			fig,
+			animate,
+			frames=iterations,
+			interval=interval,
+			)
+		if notebook:
+			plt.close(anim._fig)
+			display(HTML(anim.to_jshtml()))
+		else:
+			return anim
 
 
 
@@ -110,7 +166,6 @@ class NNCoulombFrictionGrid(BaseGrid):
 		self.grid += self.increment
 
 	def topple(self) -> int:
-
 		visited = np.full_like(self.grid, False)
 		releases = np.full_like(self.grid, 0)
 
