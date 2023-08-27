@@ -3,15 +3,18 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib import animation
-import grid_updaters
 import tqdm
 from IPython.display import HTML, display
 
-DEFAULT_UPDATER = grid_updaters.NNCoulombFrictionUpdater(10, 0.5, 0.23)
-
 class BaseGrid:
 	# TODO: add docstring
-	def __init__(self, n, m=None, boundary_size=None, save_every=3):
+	def __init__(
+			self,
+			n,
+			m=None,
+			boundary_size=None,
+			save_every=3
+		):
 		if m is None:
 			m = n
 		self.n = n
@@ -24,27 +27,24 @@ class BaseGrid:
 		self.observables = []
 		self._create_cache()
 
-	def run_n_steps(self, n, progress=False):
-		for i in tqdm.tqdm(range(n), disable=progress):
-			# print(f'i={i}')
-			# time.sleep(0.01)
-			observables = self.update_step()
+	def run(self, n_steps, transient_steps=0, progress=False):
+		for _ in tqdm.tqdm_notebook(range(transient_steps), disable=progress):
+			_ = self._update_step()
+		for i in tqdm.tqdm_notebook(range(n_steps), disable=progress):
+			observables = self._update_step()
 			self.observables.append(observables)
 			if (i%self.save_every)==0:
 				self._save_to_cache()
 
 	def clear_cache(self):
 		self.cache = np.empty_like(self.grid[:, :, 0])
-		# np.empty((self.n, self.m, 0))
-		# self._create_cache()
 
-	def update_step(self) -> dict:
+	def _update_step(self) -> dict:
 		"""Abstract method for updating step."""
 		return {}
 
 	def _create_cache(self):
 		self.cache = self.grid[:, :, None].copy()
-		# self.cache = np.empty((self.n, self.m, 0))
 
 	def _initialize_grid(self):
 		self.grid = np.random.rand(
@@ -152,9 +152,9 @@ class NNCoulombFrictionGrid(BaseGrid):
 		self._adjust_init_grid()
 
 
-	def update_step(self):
-		self.drive()
-		number_of_iterations, avalanche_size, number_of_releases = self.topple()
+	def _update_step(self):
+		self._drive()
+		number_of_iterations, avalanche_size, number_of_releases = self._topple()
 		observables = {
 			'number_of_iterations': number_of_iterations,
 			'avalanche_size': avalanche_size,
@@ -162,10 +162,10 @@ class NNCoulombFrictionGrid(BaseGrid):
 		}
 		return observables
 
-	def drive(self):
+	def _drive(self):
 		self.grid += self.increment
 
-	def topple(self) -> int:
+	def _topple(self) -> int:
 		visited = np.full_like(self.grid, False)
 		releases = np.full_like(self.grid, 0)
 
@@ -205,6 +205,67 @@ class NNCoulombFrictionGrid(BaseGrid):
 		self.grid *= 0.9*self.f_s
 
 
+class NNCoulombFrictionCountTime(NNCoulombFrictionGrid):
+	"""A simple NN coulomb friction OFC class. Renormalizes values in grid by
+	maximal value to save iuteration and compute the intended number of driving
+	iterations without topplings.
+	"""
+
+	def _update_step(self):
+		dt = self._drive()
+		number_of_iterations, avalanche_size, number_of_releases = self._topple()
+		observables = {
+			'dt': dt,
+			'number_of_iterations': number_of_iterations,
+			'avalanche_size': avalanche_size,
+			'number_of_releases': number_of_releases,
+		}
+		return observables
+
+	def _drive(self):
+		current_max_val = self._inside(self.grid).max()
+		dt = (self.f_s - current_max_val)/self.increment
+		self.grid = (self.grid / current_max_val) * self.f_s
+		return dt
+
+	def _topple(self) -> int:
+		visited = np.full_like(self.grid, False)
+		releases = np.full_like(self.grid, 0)
+
+		active_sites = self._clean_boundary_inplace(
+			self.grid >= self.f_s, False
+			)
+		_ = self._clean_boundary_inplace(self.grid, 0)
+		number_of_iterations = 0
+
+		while active_sites.any():
+			releases += active_sites
+			indices = np.vstack(np.where(active_sites)).T
+			# a nx2 array of integer indices for overloaded sites
+			n_active = indices.shape[0]
+			for i in range(n_active):
+				x, y = index = indices[i]
+
+				neighbors = index + np.array([[0, 1], [-1, 0], [1, 0], [0,-1]])
+				for j in range(len(neighbors)):
+					xn, yn = neighbors[j]
+					# self.grid[xn, yn] += self.alpha * (self.grid[x, y] - self.f_s)
+					self.grid[xn, yn] += self.alpha * self.grid[x, y]
+					visited[xn, yn] = True
+				# self.grid[x, y] = self.f_s
+				self.grid[x, y] = 0
+				active_sites = self._clean_boundary_inplace(
+					self.grid >= self.f_s, False
+					)
+				_ = self._clean_boundary_inplace(self.grid, 0)
+			number_of_iterations += 1
+
+		avalanche_size = self._inside(visited).sum()
+		number_of_releases = self._inside(releases).sum()
+		return number_of_iterations, avalanche_size, number_of_releases
+	
+
+
 if __name__ == '__main__':
 
 	try_grid = NNCoulombFrictionGrid(
@@ -216,6 +277,6 @@ if __name__ == '__main__':
 		boundary_size=2,
 		save_every=3,
 	)
-	try_grid.run_n_steps(35)
+	try_grid.run(35, transient_steps=10)
 
 	pass
