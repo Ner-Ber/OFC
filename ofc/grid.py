@@ -207,7 +207,7 @@ class NNCoulombFrictionGrid(BaseGrid):
 
 class NNCoulombFrictionCountTime(NNCoulombFrictionGrid):
 	"""A simple NN coulomb friction OFC class. Renormalizes values in grid by
-	maximal value to save iuteration and compute the intended number of driving
+	maximal value to save iteration and compute the intended number of driving
 	iterations without topplings.
 	"""
 
